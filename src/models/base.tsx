@@ -39,44 +39,52 @@ export class Base {
     onnx_file: string = "onnx/model.onnx",
     options: LoadOptions,
   ) {
-    const verbose = options.verbose;
-    const fetch = options.fetch;
+    try {
+      const verbose = options.verbose;
+      const fetch = options.fetch;
 
-    const json_bytes = await load(
-      await fetch(getHuggingfaceUrl(model, "config.json")),
-    );
-    // @ts-ignore
-    const textDecoder = new TextDecoder();
-    const model_config = JSON.parse(textDecoder.decode(json_bytes));
-    const model_path = await fetch(getHuggingfaceUrl(model, onnx_file));
+      const json_bytes = await load(
+        await fetch(getHuggingfaceUrl(model, "config.json")),
+      );
+      // @ts-ignore
+      const textDecoder = new TextDecoder();
+      const model_config = JSON.parse(textDecoder.decode(json_bytes));
+      const model_path = await fetch(getHuggingfaceUrl(model, onnx_file));
 
-    const opt: InferenceSession.SessionOptions = {
-      executionProviders: options.executionProviders,
-      graphOptimizationLevel: "all",
-    };
+      const opt: InferenceSession.SessionOptions = {
+        executionProviders: options.executionProviders,
+        graphOptimizationLevel: "all",
+      };
 
-    if (options.externalData) {
-      opt.externalData = [
-        await fetch(getHuggingfaceUrl(model, onnx_file + "_data")),
+      if (options.externalData) {
+        opt.externalData = [
+          await fetch(getHuggingfaceUrl(model, onnx_file + "_data")),
+        ];
+      }
+
+      if (verbose) {
+        opt.logSeverityLevel = 0;
+        opt.logVerbosityLevel = 0;
+        env.logLevel = "verbose";
+      }
+
+      this.sess = await InferenceSession.create(model_path, opt);
+      this.eos = BigInt(model_config.eos_token_id || 2);
+      
+      // Ensure we have valid dimensions for KV cache
+      this.kv_dims = [
+        1,
+        model_config.num_key_value_heads || model_config.num_attention_heads || 1,
+        0, // Will be filled during generation
+        Math.floor((model_config.hidden_size || 768) / (model_config.num_attention_heads || 1)),
       ];
+      
+      this.num_layers = model_config.num_hidden_layers || 0;
+      this.initializeFeed();
+    } catch (error) {
+      console.error("Error loading model:", error);
+      throw error;
     }
-
-    if (verbose) {
-      opt.logSeverityLevel = 0;
-      opt.logVerbosityLevel = 0;
-      env.logLevel = "verbose";
-    }
-
-    this.sess = await InferenceSession.create(model_path, opt);
-    this.eos = model_config.eos_token_id;
-    this.kv_dims = [
-      1,
-      model_config.num_key_value_heads,
-      0,
-      model_config.hidden_size / model_config.num_attention_heads,
-    ];
-    this.num_layers = model_config.num_hidden_layers;
-    this.initializeFeed();
   }
 
   public initializeFeed() {
@@ -91,19 +99,22 @@ export class Base {
     }
     this.feed = {};
 
-    // key value cache is zero copy, just pass gpu buffer as referece
-    const empty = this.dtype === "float16" ? new Uint16Array() : [];
-    for (let i = 0; i < this.num_layers; i++) {
-      this.feed[`past_key_values.${i}.key`] = new Tensor(
-        this.dtype,
-        empty,
-        this.kv_dims,
-      );
-      this.feed[`past_key_values.${i}.value`] = new Tensor(
-        this.dtype,
-        empty,
-        this.kv_dims,
-      );
+    // Only set up KV cache if we have layers
+    if (this.num_layers > 0) {
+      // key value cache is zero copy, just pass gpu buffer as referece
+      const empty = this.dtype === "float16" ? new Uint16Array() : [];
+      for (let i = 0; i < this.num_layers; i++) {
+        this.feed[`past_key_values.${i}.key`] = new Tensor(
+          this.dtype,
+          empty,
+          this.kv_dims,
+        );
+        this.feed[`past_key_values.${i}.value`] = new Tensor(
+          this.dtype,
+          empty,
+          this.kv_dims,
+        );
+      }
     }
   }
 
