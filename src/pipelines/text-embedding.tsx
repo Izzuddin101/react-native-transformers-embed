@@ -37,14 +37,26 @@ async function embed(text: string): Promise<Float32Array> {
     throw new Error("Tokenizer undefined, please initialize first.");
   }
 
-  const { input_ids } = await tokenizer(text, {
-    return_tensor: false,
-    padding: true,
-    truncation: true,
-    max_length: _options.max_tokens,
-  });
-
-  return await model.embed(input_ids);
+  try {
+    // Tokenize the input text
+    const tokenized = await tokenizer(text, {
+      return_tensor: false,
+      padding: true,
+      truncation: true,
+      max_length: _options.max_tokens,
+    });
+    
+    // Check if input_ids exists and is not empty
+    if (!tokenized.input_ids || tokenized.input_ids.length === 0) {
+      throw new Error("Tokenization resulted in empty input_ids");
+    }
+    
+    // Generate embeddings from the tokenized input
+    return await model.embed(tokenized.input_ids);
+  } catch (error) {
+    console.error("Error during embedding:", error);
+    throw error;
+  }
 }
 
 /**
@@ -59,9 +71,22 @@ async function init(
   onnx_path: string,
   options?: Partial<TextEmbeddingOptions>,
 ): Promise<void> {
-  _options = { ..._options, ...options };
-  tokenizer = await AutoTokenizer.from_pretrained(model_name);
-  await model.load(model_name, onnx_path, _options);
+  try {
+    _options = { ..._options, ...options };
+    
+    // Load tokenizer first
+    console.log(`Loading tokenizer from ${model_name}...`);
+    tokenizer = await AutoTokenizer.from_pretrained(model_name);
+    
+    // Then load the model
+    console.log(`Loading model from ${model_name}, path: ${onnx_path}...`);
+    await model.load(model_name, onnx_path, _options);
+    
+    console.log("Initialization completed successfully");
+  } catch (error) {
+    console.error("Error initializing pipeline:", error);
+    throw error;
+  }
 }
 
 /**
@@ -69,6 +94,8 @@ async function init(
  */
 async function release(): Promise<void> {
   await model.release();
+  // Clear the tokenizer reference
+  tokenizer = undefined as any;
 }
 
 // Export functions for external use
