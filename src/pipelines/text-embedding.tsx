@@ -38,12 +38,14 @@ async function embed(text: string): Promise<Float32Array> {
   }
 
   try {
-    // Tokenize the input text
+    // Tokenize the input text with token_type_ids
     const tokenized = await tokenizer(text, {
       return_tensor: false,
       padding: true,
       truncation: true,
       max_length: _options.max_tokens,
+      return_token_type_ids: true,
+      add_special_tokens: true,
     });
     
     // Check if input_ids exists and is not empty
@@ -52,7 +54,11 @@ async function embed(text: string): Promise<Float32Array> {
     }
     
     // Generate embeddings from the tokenized input
-    return await model.embed(tokenized.input_ids);
+    // Pass token_type_ids if available, otherwise they'll default to zeros in the model
+    return await model.embed(
+      tokenized.input_ids, 
+      tokenized.token_type_ids
+    );
   } catch (error) {
     console.error("Error during embedding:", error);
     throw error;
@@ -76,12 +82,28 @@ async function init(
     
     // Load tokenizer first
     console.log(`Loading tokenizer from ${model_name}...`);
-    tokenizer = await AutoTokenizer.from_pretrained(model_name);
+    
+    // Set options for tokenizer loading
+    const tokenizerOptions = {
+      revision: "main",
+      quantized: false,
+      progress_callback: _options.verbose ? (progress: any) => console.log(`Tokenizer loading: ${progress}`) : undefined
+    };
+    
+    tokenizer = await AutoTokenizer.from_pretrained(model_name, tokenizerOptions);
+    console.log("Tokenizer loaded successfully");
+    
+    // Verify tokenizer capabilities - log available methods for debugging
+    if (_options.verbose) {
+      console.log("Tokenizer capabilities:", 
+        Object.getOwnPropertyNames(tokenizer).filter(prop => typeof tokenizer[prop] === 'function'));
+    }
     
     // Then load the model
     console.log(`Loading model from ${model_name}, path: ${onnx_path}...`);
     await model.load(model_name, onnx_path, _options);
     
+    console.log("Model loaded successfully");
     console.log("Initialization completed successfully");
   } catch (error) {
     console.error("Error initializing pipeline:", error);
@@ -103,4 +125,30 @@ export default {
   init,
   embed,
   release,
+  // Add a utility function to check model inputs
+  getModelInfo: async () => {
+    if (!tokenizer) {
+      throw new Error("Tokenizer undefined, please initialize first.");
+    }
+    
+    try {
+      // Test tokenization with a simple string to see what fields are returned
+      const sample = await tokenizer("This is a test", {
+        return_tensor: false,
+        add_special_tokens: true,
+        return_token_type_ids: true,
+      });
+      
+      return {
+        tokenizerOutputs: Object.keys(sample),
+        modelInitialized: !!model.sess,
+        options: _options
+      };
+    } catch (error) {
+      return {
+        error: `Error getting model info: ${error.message}`,
+        options: _options
+      };
+    }
+  }
 };
