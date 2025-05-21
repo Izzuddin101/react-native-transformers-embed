@@ -13,7 +13,17 @@ export class TextEmbedding extends Base {
    * @returns Float32Array containing the embedding vector
    */
   public async embed(tokens: bigint[]): Promise<Float32Array> {
+    if (!this.sess) {
+      throw new Error("Session is undefined");
+    }
+
     const feed = this.feed;
+    
+    // Ensure tokens array is not empty to prevent dimension issues
+    if (tokens.length === 0) {
+      throw new Error("Input tokens array cannot be empty");
+    }
+
     const inputIdsTensor = new Tensor(
       "int64",
       BigInt64Array.from(tokens.map(BigInt)),
@@ -22,15 +32,12 @@ export class TextEmbedding extends Base {
     feed.input_ids = inputIdsTensor;
 
     // Create attention mask (1 for all tokens)
+    const attentionMask = BigInt64Array.from({ length: tokens.length }, () => 1n);
     feed.attention_mask = new Tensor(
       "int64",
-      BigInt64Array.from({ length: tokens.length }, () => 1n),
+      attentionMask,
       [1, tokens.length],
     );
-
-    if (!this.sess) {
-      throw new Error("Session is undefined");
-    }
 
     // Run inference to get embeddings
     const outputs = await this.sess.run(feed);
@@ -46,6 +53,12 @@ export class TextEmbedding extends Base {
     // Calculate mean across token dimension (dim 1) to get a single embedding vector
     const data = embeddings.data as Float32Array;
     const [, seqLen, hiddenSize] = embeddings.dims;
+    
+    // Check if dimensions are defined
+    if (seqLen === undefined || hiddenSize === undefined) {
+      throw new Error(`Invalid embedding dimensions: [${embeddings.dims.join(', ')}]`);
+    }
+    
     const result = new Float32Array(hiddenSize);
 
     for (let h = 0; h < hiddenSize; h++) {
